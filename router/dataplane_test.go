@@ -28,10 +28,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/net/ipv4"
-
 	"github.com/scionproto/scion/pkg/addr"
 	libepic "github.com/scionproto/scion/pkg/experimental/epic"
 	"github.com/scionproto/scion/pkg/private/ptr"
@@ -50,6 +46,9 @@ import (
 	"github.com/scionproto/scion/router"
 	"github.com/scionproto/scion/router/control"
 	"github.com/scionproto/scion/router/mock_router"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/net/ipv4"
 )
 
 var metrics = router.GetMetrics()
@@ -1722,4 +1721,41 @@ func bfd() control.BFD {
 		DesiredMinTxInterval:  1 * time.Millisecond,
 		RequiredMinRxInterval: 25 * time.Millisecond,
 	}
+}
+
+func FuzzProcessPkt(f *testing.F) {
+	ctrl := gomock.NewController(f)
+	defer ctrl.Finish()
+
+	key := []byte("testkey_xxxxxxxx")
+
+	// ProcessPacket assumes some pre-conditions:
+	// * The ingress interface has to exist. This fake map is good for most test cases.
+	//   Others need a custom one.
+	// * InternalNextHops may not be nil. Empty is ok (sufficient unless testing AS transit).
+
+	fakeExternalInterfaces := map[uint16]router.BatchConn{1: nil, 2: nil, 3: nil}
+	fakeInternalNextHops := map[uint16]*net.UDPAddr{}
+
+	prepareDP := func(ctrl *gomock.Controller) *router.DataPlane {
+		return router.NewDP(fakeExternalInterfaces,
+			nil, mock_router.NewMockBatchConn(ctrl),
+			fakeInternalNextHops, nil,
+			xtest.MustParseIA("1-ff00:0:110"), nil, key)
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte, N int, b bool) {
+		dp := prepareDP(ctrl)
+
+		ret := &ipv4.Message{}
+		ret.Buffers = make([][]byte, 1)
+		ret.Buffers[0] = make([]byte, 1500)
+		copy(ret.Buffers[0], raw)
+		ret.N = N
+		if b {
+			ret.N = len(ret.Buffers[0])
+		}
+
+		dp.ProcessPkt(1, ret)
+	})
 }
